@@ -3,9 +3,9 @@
 environments:
   uat:
     values:
-      - ../environments/env.yaml
-    secrets:
-      - ../environments/env-secrets.yaml
+      - ./charts/environments/env.yaml
+    secrets:  
+      - ./charts/environments/env-secrets.yaml
       
 ---
 
