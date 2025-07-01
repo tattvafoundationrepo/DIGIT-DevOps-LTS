@@ -1,0 +1,108 @@
+# Using existing ConfigMap: egov-config
+# Using existing Secret: db
+# No need to create new ConfigMap and Secret
+
+
+# CronJob to refresh materialized views
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: materialized-views
+  namespace: egov  # Change to your namespace
+spec:
+  # Run every 15 minutes
+  schedule: "*/15 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: refresh-views
+            image: postgres:15  # Use appropriate PostgreSQL client image
+            command:
+            - /bin/bash
+            - -c
+            - |
+              # Create the refresh script
+              cat > /tmp/refresh_materialized_views.sh << 'EOF'
+              #!/bin/bash
+              
+              # Read command-line arguments
+              PGUSER="$1"
+              PGPASSWORD="$2"
+              PGHOST="$3"
+              PGPORT="$4"
+              PGDATABASE="$5"
+              
+              # Check if all params are provided
+              if [[ -z "$PGUSER" || -z "$PGPASSWORD" || -z "$PGHOST" || -z "$PGPORT" || -z "$PGDATABASE" ]]; then
+                echo "Usage: $0 <PGUSER> <PGPASSWORD> <PGHOST> <PGPORT> <PGDATABASE>"
+                exit 1
+              fi
+              
+              # Export password so psql doesn't prompt
+              export PGPASSWORD=$PGPASSWORD
+              
+              # Refresh materialized views and log execution
+              psql -U "$PGUSER" -h "$PGHOST" -p "$PGPORT" -d "$PGDATABASE" <<EOSQL
+              
+              -- ✅ Safe to use CONCURRENTLY (assumed to have unique indexes)
+              REFRESH MATERIALIZED VIEW CONCURRENTLY deonarreports.eg_deonar_rpt_brokercurrent;
+              REFRESH MATERIALIZED VIEW CONCURRENTLY deonarreports.rpt_deonar_animal_type;
+              REFRESH MATERIALIZED VIEW CONCURRENTLY planningreports.mv_bmc_schemes;
+              REFRESH MATERIALIZED VIEW CONCURRENTLY planningreports.mv_scheme_snapshot;
+              
+              -- ❌ Use without CONCURRENTLY due to missing unique indexes
+              REFRESH MATERIALIZED VIEW deonarreports.eg_deonar_rpt_dawanwalacurrent;
+              REFRESH MATERIALIZED VIEW deonarreports.eg_deonar_rpt_fee_paid;
+              REFRESH MATERIALIZED VIEW deonarreports.eg_deonar_rpt_gawalcurrent;
+              REFRESH MATERIALIZED VIEW deonarreports.eg_deonar_rpt_helkaricurrent;
+              REFRESH MATERIALIZED VIEW deonarreports.eg_deonar_rpt_list_removal;
+              REFRESH MATERIALIZED VIEW deonarreports.eg_deonar_rpt_shopkeepercurrent;
+              REFRESH MATERIALIZED VIEW deonarreports.eg_deonar_rpt_stockmovement;
+              REFRESH MATERIALIZED VIEW deonarreports.eg_deonar_rpt_tradercurrent;
+              REFRESH MATERIALIZED VIEW deonarreports.eg_deonar_rptviewearning;
+              REFRESH MATERIALIZED VIEW planningreports.mv_current_application_sla_bmc;
+              REFRESH MATERIALIZED VIEW systemreports.mv_user_details;
+              
+              -- 📝 Log the cron job run
+              INSERT INTO cron_log DEFAULT VALUES;
+              
+              EOSQL
+              EOF
+              
+              chmod +x /tmp/refresh_materialized_views.sh
+              
+              # Execute the script with environment variables
+              /tmp/refresh_materialized_views.sh "$PGUSER" "$PGPASSWORD" "$PGHOST" "$PGPORT" "$PGDATABASE"
+            resources:
+              requests:
+                memory: "64Mi"
+                cpu: "100m"
+              limits:
+                memory: "128Mi"
+                cpu: "200m"
+            env:
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: db
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db
+                  key: password
+            - name: PGHOST
+              valueFrom:
+                configMapKeyRef:
+                  name: egov-config
+                  key: db-host
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: egov-config
+                  key: db-name
